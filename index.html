@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aethelgard: The Honest Blade - Prototipe</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0f111a;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.9);
+            border: 4px solid #333;
+            border-radius: 10px;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+            background: #234e1d;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            font-size: 13px;
+            font-weight: bold;
+            text-shadow: 1px 1px 3px #000;
+        }
+        .stat-box {
+            background: rgba(15, 15, 25, 0.85);
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+        #dialogue-box {
+            position: absolute;
+            bottom: 20px;
+            left: 40px;
+            right: 40px;
+            background: rgba(18, 18, 28, 0.95);
+            border: 2px solid #d4af37;
+            border-radius: 8px;
+            padding: 15px;
+            display: none;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.7);
+        }
+        #dialogue-text {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .dialogue-btn {
+            background: #d4af37;
+            color: #111;
+            border: none;
+            padding: 6px 14px;
+            margin-right: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .dialogue-btn:hover {
+            background: #f3ca52;
+        }
+        #controls-hint {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #aaa;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        
+        <div id="ui-overlay">
+            <div class="stat-box" id="hp-display">HP: 100/100 | Stamina: 100</div>
+            <div class="stat-box" id="quest-display">Quest: Temui Kakek Eldrin di Hutan</div>
+        </div>
+
+        <div id="dialogue-box">
+            <p id="dialogue-text">Teks dialog...</p>
+            <div id="dialogue-options"></div>
+        </div>
+    </div>
+    <div id="controls-hint">Kontrol: <b>WASD</b> (Gerak) | <b>J</b> (Pedang) | <b>K</b> (Dash) | <b>L</b> (Angkat/Dorong Objek) | <b>E</b> (Interaksi NPC/Chest)</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'PLAYING'; // PLAYING, DIALOGUE
+
+const player = {
+    x: 100, y: 250, w: 22, h: 22,
+    speed: 3.2,
+    hp: 100, maxHp: 100,
+    stamina: 100, maxStamina: 100,
+    facing: 'RIGHT',
+    isAttacking: false, attackTimer: 0,
+    isDashing: false, dashTimer: 0,
+    carryingObj: null,
+    gold: 0, score: 0
+};
+
+// Objek rintangan & lingkungan
+const obstacles = [
+    { x: 280, y: 80, w: 140, h: 40 },
+    { x: 280, y: 380, w: 140, h: 40 },
+    { x: 580, y: 160, w: 40, h: 180 }
+];
+
+// Objek interaktif (Batu puzzle & Chest)
+let interactiveObjects = [
+    { id: 1, x: 200, y: 240, w: 24, h: 24, type: 'stone', isLifted: false },
+    { id: 2, x: 520, y: 240, w: 28, h: 28, type: 'chest', opened: false }
+];
+
+let enemies = [
+    { id: 1, x: 440, y: 120, w: 22, h: 22, hp: 45, maxHp: 45, speed: 1.4, state: 'WANDER' },
+    { id: 2, x: 670, y: 340, w: 22, h: 22, hp: 60, maxHp: 60, speed: 1.1, state: 'WANDER' }
+];
+
+const npc = {
+    x: 380, y: 230, w: 22, h: 22,
+    name: 'Kakek Eldrin',
+    questState: 0 // 0: Belum, 1: Aktif, 2: Selesai
+};
+
+let currentQuestText = "Quest: Temui Kakek Eldrin di dekat reruntuhan.";
+const keys = {};
+
+// Event Listeners
+window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+
+    if (e.key.toLowerCase() === 'j' && !player.isAttacking && gameState === 'PLAYING') {
+        player.isAttacking = true;
+        player.attackTimer = 12;
+    }
+
+    if (e.key.toLowerCase() === 'k' && player.stamina >= 25 && !player.isDashing && gameState === 'PLAYING') {
+        player.isDashing = true;
+        player.dashTimer = 8;
+        player.stamina -= 25;
+    }
+
+    if (e.key.toLowerCase() === 'l' && gameState === 'PLAYING') {
+        if (player.carryingObj) {
+            // Lempar batu
+            player.carryingObj.x = player.x + (player.facing === 'RIGHT' ? 45 : -45);
+            player.carryingObj.y = player.y;
+            player.carryingObj.isLifted = false;
+            player.carryingObj = null;
+        } else {
+            // Angkat batu terdekat
+            interactiveObjects.forEach(obj => {
+                if (obj.type === 'stone' && !obj.isLifted && Math.hypot(player.x - obj.x, player.y - obj.y) < 35) {
+                    obj.isLifted = true;
+                    player.carryingObj = obj;
+                }
+            });
+        }
+    }
+
+    if (e.key.toLowerCase() === 'e' && gameState === 'PLAYING') {
+        // Interaksi NPC
+        if (Math.hypot(player.x - npc.x, player.y - npc.y) < 45) {
+            openDialogue();
+        }
+        // Interaksi Chest
+        interactiveObjects.forEach(obj => {
+            if (obj.type === 'chest' && !obj.opened && Math.hypot(player.x - obj.x, player.y - obj.y) < 35) {
+                obj.opened = true;
+                player.gold += 150;
+                currentQuestText = "Quest Selesai! Anda menemukan peti berisi harta berharga.";
+            }
+        });
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+function openDialogue() {
+    gameState = 'DIALOGUE';
+    const box = document.getElementById('dialogue-box');
+    const text = document.getElementById('dialogue-text');
+    const options = document.getElementById('dialogue-options');
+    
+    box.style.display = 'block';
+    options.innerHTML = '';
+
+    if (npc.questState === 0) {
+        text.innerHTML = `<b>${npc.name}:</b> "Wahai anak muda, seseorang meninggalkan kantong koin emas di jalan setapak hutan. Apakah kamu akan menyerahkannya kepada pemiliknya yang kesulitan, atau mengambilnya untuk dirimu sendiri?"`;
+        
+        addDialogueButton("Kembalikan (Jujur)", () => {
+            npc.questState = 2;
+            player.score += 300;
+            currentQuestText = "Quest Selesai: Anda memilih jalan kejujuran. Kehormatan meningkat.";
+            closeDialogue();
+        });
+        
+        addDialogueButton("Ambil Saja (Serakah)", () => {
+            npc.questState = 2;
+            player.gold += 200;
+            currentQuestText = "Quest Selesai: Anda mendapatkan emas, tetapi kehilangan kepercayaan warga.";
+            closeDialogue();
+        });
+    } else {
+        text.innerHTML = `<b>${npc.name}:</b> "Ingatlah selalu, pilihan moral menentukan siapa diri kita sebenarnya di saat-saat sulit."`;
+        addDialogueButton("Tutup", () => { closeDialogue(); });
+    }
+}
+
+function addDialogueButton(label, callback) {
+    const btn = document.createElement('button');
+    btn.className = 'dialogue-btn';
+    btn.innerText = label;
+    btn.onclick = callback;
+    document.getElementById('dialogue-options').appendChild(btn);
+}
+
+function closeDialogue() {
+    document.getElementById('dialogue-box').style.display = 'none';
+    gameState = 'PLAYING';
+}
+
+function checkCollision(nx, ny, w, h) {
+    for (let obs of obstacles) {
+        if (nx < obs.x + obs.w && nx + w > obs.x && ny < obs.y + obs.h && ny + h > obs.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    if (player.stamina < player.maxStamina) player.stamina += 0.25;
+
+    if (player.isDashing) {
+        player.dashTimer--;
+        if (player.dashTimer <= 0) player.isDashing = false;
+    }
+
+    if (player.isAttacking) {
+        player.attackTimer--;
+        if (player.attackTimer <= 0) player.isAttacking = false;
+    }
+
+    let dx = 0, dy = 0;
+    let speed = player.isDashing ? player.speed * 2.8 : player.speed;
+
+    if (keys['w']) { dy = -speed; player.facing = 'UP'; }
+    if (keys['s']) { dy = speed; player.facing = 'DOWN'; }
+    if (keys['a']) { dx = -speed; player.facing = 'LEFT'; }
+    if (keys['d']) { dx = speed; player.facing = 'RIGHT'; }
+
+    if (!checkCollision(player.x + dx, player.y, player.w, player.h)) player.x += dx;
+    if (!checkCollision(player.x, player.y + dy, player.w, player.h)) player.y += dy;
+
+    // Batas layar map
+    player.x = Math.max(15, Math.min(canvas.width - 35, player.x));
+    player.y = Math.max(15, Math.min(canvas.height - 35, player.y));
+
+    if (player.carryingObj) {
+        player.carryingObj.x = player.x;
+        player.carryingObj.y = player.y - 22;
+    }
+
+    // Update AI Musuh
+    enemies.forEach(en => {
+        let dist = Math.hypot(player.x - en.x, player.y - en.y);
+        if (dist < 160) {
+            en.state = 'CHASE';
+            let angle = Math.atan2(player.y - en.y, player.x - en.x);
+            en.x += Math.cos(angle) * en.speed;
+            en.y += Math.sin(angle) * en.speed;
+
+            if (dist < 22 && player.hp > 0) {
+                player.hp -= 0.6;
+            }
+        } else {
+            en.state = 'WANDER';
+        }
+
+        // Hit damage dari pedang player
+        if (player.isAttacking && Math.hypot(player.x - en.x, player.y - en.y) < 35) {
+            en.hp -= 2.5;
+            en.x += (player.facing === 'RIGHT' ? 10 : -10);
+        }
+    });
+
+    enemies = enemies.filter(en => en.hp > 0);
+
+    // Update teks UI
+    document.getElementById('hp-display').innerHTML = `HP: ${Math.max(0, Math.floor(player.hp))}/${player.maxHp} | Stamina: ${Math.floor(player.stamina)} | Gold: ${player.gold}`;
+    document.getElementById('quest-display').innerHTML = currentQuestText;
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Latar Belakang / Rumput Hutan
+    ctx.fillStyle = '#285222';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Detail Dekorasi Lantai / Jalur Hutan
+    ctx.fillStyle = '#1e3e19';
+    ctx.fillRect(50, 200, 200, 100);
+    ctx.fillRect(450, 180, 250, 120);
+
+    // Rintangan Map
+    obstacles.forEach(obs => {
+        ctx.fillStyle = '#4a4a4a';
+        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+        ctx.strokeStyle = '#222';
+        ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+    });
+
+    // Objek Interaktif (Batu & Chest)
+    interactiveObjects.forEach(obj => {
+        if (obj.type === 'stone') {
+            ctx.fillStyle = obj.isLifted ? '#999' : '#686a6d';
+            ctx.beginPath();
+            ctx.arc(obj.x + obj.w/2, obj.y + obj.h/2, obj.w/2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        } else if (obj.type === 'chest') {
+            ctx.fillStyle = obj.opened ? '#5c3a21' : '#f3b71c';
+            ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+            ctx.strokeStyle = '#222';
+            ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+        }
+    });
+
+    // NPC
+    ctx.fillStyle = '#3a66db';
+    ctx.fillRect(npc.x, npc.y, npc.w, npc.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px sans-serif';
+    ctx.fillText("Eldrin", npc.x - 4, npc.y - 6);
+
+    // Musuh
+    enemies.forEach(en => {
+        ctx.fillStyle = en.state === 'CHASE' ? '#c0392b' : '#922b21';
+        ctx.fillRect(en.x, en.y, en.w, en.h);
+        
+        // HP Bar Musuh
+        ctx.fillStyle = '#000';
+        ctx.fillRect(en.x, en.y - 7, en.w, 4);
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillRect(en.x, en.y - 7, (en.hp / en.maxHp) * en.w, 4);
+    });
+
+    // Player
+    ctx.fillStyle = player.isDashing ? '#00e5ff' : '#f1c40f';
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+
+    // Efek Slash Pedang
+    if (player.isAttacking) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        if (player.facing === 'RIGHT') ctx.arc(player.x + 22, player.y + 11, 22, -Math.PI/2, Math.PI/2);
+        if (player.facing === 'LEFT') ctx.arc(player.x, player.y + 11, 22, Math.PI/2, Math.PI*1.5);
+        if (player.facing === 'UP') ctx.arc(player.x + 11, player.y, 22, Math.PI, 0);
+        if (player.facing === 'DOWN') ctx.arc(player.x + 11, player.y + 22, 22, 0, Math.PI);
+        ctx.stroke();
+    }
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+
+</body>
+</html>
